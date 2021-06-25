@@ -39,7 +39,7 @@ Output file. Each line defines a rotation (only one rotation within a group, all
   <li>Index of a rotation.</li>
   <li>Four components of the corresponding quaternion.</li>
   <li>An estimate of the maximum distance between an arbitary rotation and the nearest rotation from the list (all rotations before and including the new one).</li>
-  <li>The corresponding angular value for this distance.</li>
+  <li>The corresponding angular value for this distance (in degrees).</li>
 </ul>
 
 <hr>
