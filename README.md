@@ -25,13 +25,14 @@ When all dimensions are the same, then we get 24 rotations in a group.
 
 The code (quatGlobal.cpp) allows a user to generate the list of rotations. The code uses OpenMP and requries the use of Intel Compiler (can be obtained from <a href="https://software.intel.com/content/www/us/en/develop/tools/oneapi/all-toolkits.html">oneAPI</a>).
 
-Parameters to modify.
+Parameters to modify (all in the first lines of the file with <tt>//Modify</tt> labels).
 <ul>
-  <li>Output text file (line 491).</li>
-  <li>Output file for values of angular distances (3D cube, line 449). The function <tt>writeOutput</tt> is commented out (to uncomment see line 868).</li>
-  <li>Number of items in the list. Currently it is set to 100 (line 806).</li>
-  <li>Number of rotations in a group (<tt>ng</tt>, line 15). When this parameter is changed, you also need to specify how those rotations are generated. Examples of those rotations are provided in <tt>createRotMat</tt> function.</li>
-  <li>Size of grids used to generate rotations (parameters <tt>block_sizeh</tt> in line 20 and <tt>nblocks</tt> line 22). The first parameter controls the size of blocks used by each thread, the second one is to find the total number of blocks processed by all threads.</li>
+  <li>Type of a problem (choose one of <tt>#define</tt> parameters: <tt>CASE_XYZ</tt>, <tt>CASE_ALL</tt>, <tt>CASE_XY</tt>, <tt>CASE_YZ</tt>, <tt>CASE_XZ</tt>).
+  <li>Output folder <tt>outputFolder</tt>.</li>
+  <li>By default, only a list of quaternions is geenrated. It is also possible to seed the output volume (it can be huge), to do this uncomment <tt>#define WRITE_OUTPUT</tt>.</li>
+  <li>Number of items in the list (<tt>ITEMS_IN_THE_LIST</tt>).</li>
+  <li>Size of grids used to generate rotations (parameters <tt>block_sizeh</tt> and <tt>nblocks</tt>). The size is then <tt>2 * block_sizeh * nblocks</tt> and will be a suffix in the output file. It seems that if the same size is set, the run times are smaller for smaller values of <tt>block_sizeh</tt>.</li>
+  <li>Parameters <tt>nprintStep</tt> and <tt>nprintStepScreen</tt> control how often data is written to the output file or onto the screen. When you interupt the code, you should still have a file containing multiple of <tt>nprintStep</tt> quaternions.</li>
 </ul>
 
 Output file. Each line defines a rotation (only one rotation within a group, all other rotations can be found using the known rotation matrices)
@@ -41,6 +42,11 @@ Output file. Each line defines a rotation (only one rotation within a group, all
   <li>An estimate of the maximum distance between an arbitary rotation and the nearest rotation from the list (all rotations before and including the new one).</li>
   <li>The corresponding angular value for this distance (in degrees).</li>
 </ul>
+
+To compile the code you may use:
+<div><tt></tt>icpc quatGlobal.cpp -mssse3 -std=c++17 -lipps -lippcore -qopenmp -o rotGlobalNew.exe</div></tt></div>
+
+
 
 <hr>
   
