@@ -1,6 +1,6 @@
 #include <iostream>
 #include <fstream>
-#include <cstring>
+#include <string.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -47,7 +47,6 @@ const int ng = 8;
 const int ng = 8;
 #endif
 
-
 //const char outputFolder[1000] = "C:/Temp2/EG4/out";//Modify
 const char outputFolder[1000] = "../data";//Modify
 
@@ -85,21 +84,19 @@ public:
 	Ipp32f** pResult;
 	mat3D rotM[ng];
 	quat qrot[ng], qini, qnew;
-	quat qPrint[nprintStep], qBest[4 * nt];
+	quat *qPrint, *qBest;
 
 	int nThreads;
 	
 	Ipp64f** pd, ** pw, **pScale;
-	double bestPrint[nprintStep], bestAngle[nprintStep];
-	Ipp64f *vMaxScaleFactor;
-	double vBest[4 * nt];
+	Ipp64f * bestPrint, *bestAngle, *vMaxScaleFactor, *vBest;
 	
 	char oFileName[1000];
 
 	FILE* fo, *foInfo;
 };
 
-int updateData(Ipp32f* vd, double* weight, Ipp64f* vScale, double maxScaleValue, Ipp64f* vds, int ind, double blockStep, double dstep, double* vBest, quat* qBest, float* valMax, quat* qMax);
+int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, Ipp64f maxScaleValue, Ipp64f* vds, int ind, double blockStep, double dstep, Ipp64f* vBest, quat* qBest, float* valMax, quat* qMax);
 
 int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double blockStep, double dstep);
 
@@ -114,12 +111,19 @@ QuatN::QuatN() {
 	}
 	printf("Number of threads: %i\n", nThreads);
 
+	qPrint = (quat*)malloc(sizeof(quat) * nprintStep);
+	qBest = (quat*)malloc(sizeof(quat) * 4 * nt);
+
 	vMaxScaleFactor = ippsMalloc_64f(nt);
 
 	pd = (Ipp64f**)malloc(sizeof(Ipp64f*) * nThreads);
 	pw = (Ipp64f**)malloc(sizeof(Ipp64f*) * nThreads);
 	pScale = (Ipp64f**)malloc(sizeof(Ipp64f*) * nt);
 	pResult = (Ipp32f**)malloc(sizeof(Ipp32f*) * nt);
+
+	bestPrint = ippsMalloc_64f(nprintStep);
+	bestAngle = ippsMalloc_64f(nprintStep);
+	vBest = ippsMalloc_64f(4 * nt);
 
 	for (int i = 0; i < nThreads; i++) {
 		pd[i] = nullptr;
@@ -134,6 +138,11 @@ QuatN::QuatN() {
 }
 
 QuatN::~QuatN() {
+	if (qBest != nullptr) { free(qBest); qBest = nullptr; }
+	if (qPrint != nullptr) { free(qPrint); qPrint = nullptr; }
+	if (bestAngle != nullptr) { ippsFree(bestAngle); bestAngle = nullptr; }
+	if (bestPrint != nullptr) { ippsFree(bestPrint); bestPrint = nullptr; }
+	if (vBest != nullptr) { ippsFree(vBest); vBest = nullptr; }
 	if (vMaxScaleFactor != nullptr) { ippsFree(vMaxScaleFactor); vMaxScaleFactor = nullptr; }
 	for (int i = 0; i < nt; i++) {
 		if (pResult[i] != nullptr) {

@@ -2,7 +2,7 @@
 #include <fstream>
 #include <math.h>
 #include <stdlib.h>
-#include <cstring>
+#include <string.h>
 
 #include <omp.h>
 
@@ -64,12 +64,10 @@ public:
 
 	double angleIn;
 	
-	quat qPrint[nprintStep];
-	double bestPrint[nprintStep], bestAngle[nprintStep];
-	double vBest[nt], parD, parStep;
-	quat qBest[nt];
+	quat *qPrint, *qBest;
+	Ipp64f* bestPrint, * bestAngle, *vBest, * vMaxScaleFactor;
+	double parD, parStep;
 
-	Ipp64f* vMaxScaleFactor;
 	char oFileName[1000];
 
 	FILE* fo, *foInfo;
@@ -89,6 +87,13 @@ QuatA::QuatA() {
 
 	vMaxScaleFactor = ippsMalloc_64f(nt);
 
+	qPrint = (quat*)malloc(sizeof(quat) * nprintStep);
+	qBest = (quat*)malloc(sizeof(quat) * 4 * nt);
+
+	bestPrint = ippsMalloc_64f(nprintStep);
+	bestAngle = ippsMalloc_64f(nprintStep);
+	vBest = ippsMalloc_64f(4 * nt);
+	
 	pResult = (Ipp64f**)malloc(sizeof(Ipp64f*) * nt);
 	pScale = (Ipp64f**)malloc(sizeof(Ipp64f*) * nt);
 	pd = (Ipp64f**)malloc(sizeof(Ipp64f*) * nThreads);
@@ -106,6 +111,11 @@ QuatA::QuatA() {
 }
 
 QuatA::~QuatA() {
+	if (qBest != nullptr) { free(qBest); qBest = nullptr; }
+	if (qPrint != nullptr) { free(qPrint); qPrint = nullptr; }
+	if (bestAngle != nullptr) { ippsFree(bestAngle); bestAngle = nullptr; }
+	if (bestPrint != nullptr) { ippsFree(bestPrint); bestPrint = nullptr; }
+	if (vBest != nullptr) { ippsFree(vBest); vBest = nullptr; }
 	if (vMaxScaleFactor != nullptr) { ippsFree(vMaxScaleFactor); vMaxScaleFactor = nullptr; }
 	if (pResult != nullptr) {
 		for (int i = 0; i < nt; i++) {
