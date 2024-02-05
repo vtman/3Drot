@@ -44,7 +44,7 @@ Output file. Each line defines a rotation (only one rotation within a group, all
 </ul>
 
 To compile the code you may use:
-<div><tt></tt>icpc quatGlobal.cpp -mssse3 -std=c++17 -lipps -lippcore -qopenmp -o rotGlobalNew.exe</div></tt></div>
+<div><tt>icpc quatGlobal.cpp -mssse3 -std=c++17 -lipps -lippcore -qopenmp -o rotGlobal.exe</div></tt></div>
 
 
 
@@ -54,11 +54,12 @@ To compile the code you may use:
 
 Code (quatLocal.cpp) is used for the local problem.
 
-Parameters to modify.
+Parameters to modify are similar to the global problem.
 <ul>
-  <li>Output text file (line 387).</li>
-  <li>Number of items in the list. Currently it is set to 100000 (line 785).</li>
-  <li>Initial angular distance (in degrees, line 377).</li>
-  <li>Size of grids used to generate rotations (parameters <tt>block_sizeh</tt> in line 18 and <tt>nblocks</tt> line 20).
+  <li>The angular range is defined by <tt>angleInDeg</tt>.</li>
 </ul>
+
+To compile the code you may use:
+<div><tt>icpc quatLocal.cpp -mssse3 -std=c++17 -lipps -lippcore -qopenmp -o rotLocal.exe</div></tt></div>
+
 
