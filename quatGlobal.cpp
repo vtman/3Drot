@@ -1,34 +1,66 @@
 #include <iostream>
 #include <fstream>
+#include <cstring>
 #include <math.h>
 #include <stdlib.h>
+
+#include <chrono>
 
 #include <omp.h>
 
 #include <emmintrin.h>
 #include <immintrin.h>
+#include <smmintrin.h>
 #include "ipp.h"
 
-#define pi180 0.01745329251994329576923690768489
-#define pi180r 57.295779513082320876798154814105
+//Modify
+//Uncomment one (only) of the #define lines
+#define CASE_XYZ 1
+//#define CASE_ALL 2
+//#define CASE_XY 3
+//#define CASE_YZ 4
+//#define CASE_XZ 5
 
-#define ng 24
+//Modify
+//Uncomment to write output volume file
+//#define WRITE_OUTPUT 1
 
-#define nprintStep 50
-#define nprintStepScreen 10
+const int block_sizeh = 8;//Modify
+const int nblocks = 32;//Modify
+const int ITEMS_IN_THE_LIST = 10000;//Modify
+const int nprintStep = 50;//Modify
+const int nprintStepScreen = 100;//Modify
 
-#define block_sizeh 8
-#define block_size (2*block_sizeh)
-#define nblocks 10
+#ifdef CASE_XYZ
+const int ng = 24;
+#endif
+#ifdef CASE_ALL
+const int ng = 4;
+#endif
+#ifdef CASE_XY
+const int ng = 8;
+#endif
+#ifdef CASE_XZ
+const int ng = 8;
+#endif
+#ifdef CASE_YZ
+const int ng = 8;
+#endif
 
-#define nbt (block_size*block_size*block_size)
-#define nbt4 (4*nbt)
-#define nx (block_size*nblocks)
-#define ny nx
-#define nz nx
-#define nt (nblocks*nblocks*nblocks)
 
-#define nthreads 6
+//const char outputFolder[1000] = "C:/Temp2/EG4/out";//Modify
+const char outputFolder[1000] = "../data";//Modify
+
+const double pi180 = 0.01745329251994329576923690768489;
+const double pi180r = 57.295779513082320876798154814105;
+
+const int block_size = (2 * block_sizeh);
+const int nbt = (block_size * block_size * block_size);
+const int nbt4 = (4 * nbt);
+const int nx = (block_size * nblocks);
+const int ny = nx;
+const int nz = nx;
+const int nt = (nblocks * nblocks * nblocks);
 
 struct quat {
 	double q[4];
@@ -37,8 +69,6 @@ struct quat {
 struct mat3D {
 	double m[9];
 };
-
-
 
 class QuatN {
 public:
@@ -52,63 +82,104 @@ public:
 	int writeOutput();
 	int findScalCoeff(quat a);
 
-	Ipp32f* pResult[nt];
+	Ipp32f** pResult;
 	mat3D rotM[ng];
 	quat qrot[ng], qini, qnew;
+	quat qPrint[nprintStep], qBest[4 * nt];
 
-
-	double* pd[nthreads];
-	quat qPrint[nprintStep];
+	int nThreads;
+	
+	Ipp64f** pd, ** pw, **pScale;
 	double bestPrint[nprintStep], bestAngle[nprintStep];
+	Ipp64f *vMaxScaleFactor;
 	double vBest[4 * nt];
-	quat qBest[4 * nt];
-
-	double* pw[nthreads], *pScale[nt], vMaxScaleFactor[nt];
+	
 	char oFileName[1000];
 
 	FILE* fo, *foInfo;
 };
 
-int updateData(Ipp32f* vd, double* weight, double* vScale, double maxScaleValue, Ipp64f* vds, int ind, double blockStep, double dstep, double* vBest, quat* qBest, float* valMax, quat* qMax);
+int updateData(Ipp32f* vd, double* weight, Ipp64f* vScale, double maxScaleValue, Ipp64f* vds, int ind, double blockStep, double dstep, double* vBest, quat* qBest, float* valMax, quat* qMax);
 
-int findScaleFactor(double *vScale, double *maxScaleValue, int ind, double blockStep, double dstep);
+int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double blockStep, double dstep);
 
 QuatN::QuatN() {
 	for (int i = 0; i < nt; i++) {
 		pResult[i] = nullptr;
 	}
-	for (int i = 0; i < nthreads; i++) {
-		pd[i] = nullptr;
+
+#pragma omp parallel
+	{
+		nThreads = omp_get_num_threads();
 	}
-	for (int i = 0; i < nthreads; i++) {
+	printf("Number of threads: %i\n", nThreads);
+
+	vMaxScaleFactor = ippsMalloc_64f(nt);
+
+	pd = (Ipp64f**)malloc(sizeof(Ipp64f*) * nThreads);
+	pw = (Ipp64f**)malloc(sizeof(Ipp64f*) * nThreads);
+	pScale = (Ipp64f**)malloc(sizeof(Ipp64f*) * nt);
+	pResult = (Ipp32f**)malloc(sizeof(Ipp32f*) * nt);
+
+	for (int i = 0; i < nThreads; i++) {
+		pd[i] = nullptr;
 		pw[i] = nullptr;
 	}
 	for (int i = 0; i < nt; i++) {
 		pScale[i] = nullptr;
+		pResult[i] = nullptr;
 	}
 	foInfo = nullptr;
+	fo = nullptr;
 }
 
 QuatN::~QuatN() {
+	if (vMaxScaleFactor != nullptr) { ippsFree(vMaxScaleFactor); vMaxScaleFactor = nullptr; }
 	for (int i = 0; i < nt; i++) {
 		if (pResult[i] != nullptr) {
 			ippsFree(pResult[i]); pResult[i] = nullptr;
 		}
 	}
 
-	for (int i = 0; i < nthreads; i++) {
-		free(pd[i]); pd[i] = nullptr;
+	if (pd != nullptr) {
+		for (int i = 0; i < nThreads; i++) {
+			if (pd[i] != nullptr) {
+				ippsFree(pd[i]); pd[i] = nullptr;
+			}
+		}
+		free(pd); pd = nullptr;
 	}
 
-	for (int i = 0; i < nthreads; i++) {
-		free(pw[i]); pw[i] = nullptr;
+	if (pw != nullptr) {
+		for (int i = 0; i < nThreads; i++) {
+			if (pw[i] != nullptr) {
+				ippsFree(pw[i]); pw[i] = nullptr;
+			}
+		}
+		free(pw); pw = nullptr;
 	}
-	for (int i = 0; i < nt; i++) {
-		free(pScale[i]); pScale[i] = nullptr;
+	if (pScale != nullptr) {
+		for (int i = 0; i < nt; i++) {
+			if (pScale[i] != nullptr) {
+				ippsFree(pScale[i]); pScale[i] = nullptr;
+			}
+		}
+		free(pScale); pScale = nullptr;
+	}
+	if (pResult != nullptr) {
+		for (int i = 0; i < nt; i++) {
+			if (pResult[i] != nullptr) {
+				ippsFree(pResult[i]); pResult[i] = nullptr;
+			}
+		}
+		free(pResult); pResult = nullptr;
 	}
 
 	if (foInfo != nullptr) {
 		fclose(foInfo); foInfo = nullptr;
+	}
+	if (fo != nullptr) {
+		fclose(fo); fo = nullptr;
 	}
 }
 
@@ -293,6 +364,7 @@ int createRotMat(mat3D* rotM) {
 		rotM[i] = zeroMatrix();
 	}
 
+#ifdef CASE_XYZ
 	//x=y=z, ng = 24
 	rotM[0].m[0] = 1.0; rotM[0].m[4] = 1.0; rotM[0].m[8] = 1.0;
 	rotM[1].m[6] = 1.0; rotM[1].m[1] = 1.0; rotM[1].m[5] = 1.0;
@@ -325,17 +397,18 @@ int createRotMat(mat3D* rotM) {
 	rotM[21].m[6] = 1.0; rotM[21].m[1] = -1.0; rotM[21].m[5] = -1.0;
 	rotM[22].m[3] = 1.0; rotM[22].m[7] = -1.0; rotM[22].m[2] = -1.0;
 	rotM[23].m[0] = 1.0; rotM[23].m[4] = -1.0; rotM[23].m[8] = -1.0;
-	
-	/*
+#endif
+
+#ifdef CASE_ALL
 	//all different, ng = 4
 
 	rotM[0].m[0] = 1.0;  rotM[0].m[4] = 1.0;  rotM[0].m[8] = 1.0;
 	rotM[1].m[0] = -1.0; rotM[1].m[4] = -1.0; rotM[1].m[8] = 1.0;
 	rotM[2].m[0] = -1.0; rotM[2].m[4] = 1.0;  rotM[2].m[8] = -1.0;
 	rotM[3].m[0] = 1.0;  rotM[3].m[4] = -1.0; rotM[3].m[8] = -1.0;
-	*/
+#endif
 
-	/*
+#ifdef CASE_XY
 	//x = y, ng  =8
 
 	rotM[0].m[0] = 1.0;  rotM[0].m[4] = 1.0;  rotM[0].m[8] = 1.0;
@@ -346,11 +419,10 @@ int createRotMat(mat3D* rotM) {
 	rotM[5].m[0] = -1.0; rotM[5].m[4] = 1.0;  rotM[5].m[8] = -1.0;
 	rotM[6].m[3] = -1.0; rotM[6].m[1] = -1.0; rotM[6].m[8] = -1.0;
 	rotM[7].m[0] = 1.0;  rotM[7].m[4] = -1.0; rotM[7].m[8] = -1.0;
-	*/
+#endif
 
-	/*
+#ifdef CASE_XZ
 	//x = z , ng = 8
-
 	rotM[0].m[0] = 1.0;  rotM[0].m[4] = 1.0;  rotM[0].m[8] = 1.0;
 	rotM[1].m[6] = -1.0; rotM[1].m[4] = 1.0;  rotM[1].m[2] = 1.0;
 	rotM[2].m[0] = -1.0; rotM[2].m[4] = -1.0; rotM[2].m[8] = 1.0;
@@ -359,11 +431,10 @@ int createRotMat(mat3D* rotM) {
 	rotM[5].m[0] = -1.0; rotM[5].m[4] = 1.0;  rotM[5].m[8] = -1.0;
 	rotM[6].m[6] = -1.0; rotM[6].m[4] = -1.0; rotM[6].m[2] = -1.0;
 	rotM[7].m[0] = 1.0;  rotM[7].m[4] = -1.0; rotM[7].m[8] = -1.0;
-	*/
+#endif
 
-	/*
+#ifdef CASE_YZ
 	//y = z, ng = 8
-
 	rotM[0].m[0] = 1.0;  rotM[0].m[4] = 1.0;  rotM[0].m[8] = 1.0;
 	rotM[1].m[0] = -1.0; rotM[1].m[7] = 1.0;  rotM[1].m[5] = 1.0;
 	rotM[2].m[6] = -1.0; rotM[2].m[4] = 1.0;  rotM[2].m[2] = 1.0;
@@ -373,7 +444,7 @@ int createRotMat(mat3D* rotM) {
 	rotM[6].m[0] = -1.0; rotM[6].m[4] = 1.0;  rotM[6].m[8] = -1.0;
 	rotM[7].m[0] = -1.0; rotM[7].m[7] = -1.0; rotM[7].m[5] = -1.0;
 	rotM[8].m[0] = 1.0;  rotM[8].m[4] = -1.0; rotM[8].m[8] = -1.0;
-	*/
+#endif
 	return 0;
 }
 
@@ -391,6 +462,9 @@ int QuatN::setRotations() {
 }
 
 int QuatN::allocateMemory() {
+	double x3, x2, x1, w, dblock;
+	int ind;
+
 	for (int i = 0; i < nt; i++) {
 		pResult[i] = ippsMalloc_32f(nbt4);
 		if (pResult[i] == nullptr) {
@@ -400,26 +474,22 @@ int QuatN::allocateMemory() {
 		ippsSet_32f(2.0, pResult[i], nbt4);
 	}
 
-	for (int i = 0; i < nthreads; i++) {
-		pd[i] = (double *)malloc(sizeof(double) *nbt);
+	for (int i = 0; i < nThreads; i++) {
+		pd[i] = ippsMalloc_64f(nbt);
 	}
 
-	for (int i = 0; i < nthreads; i++) {
-		pw[i] = (double*)malloc(sizeof(double) * 16 * ng);
+	for (int i = 0; i < nThreads; i++) {
+		pw[i] = ippsMalloc_64f(16 * ng);
 	}
 
 	for (int i = 0; i < nt; i++) {
-		pScale[i] = (double *)malloc(sizeof(double)*nbt);
+		pScale[i] = ippsMalloc_64f(nbt);
 	}
 	ippsSet_64f(-1.0, vBest, 4 * nt);
-
-	double x3, x2, x1, w, dblock;
 
 	dblock = 2.0 / double(nx - 1) * double(block_size);
 
 	w = 1.0;
-
-	int ind;
 
 	for (int k = 0; k < nblocks; k++) {
 		x3 = double(k) * dblock;
@@ -446,7 +516,7 @@ int QuatN::writeOutput() {
 	int kij, kk, kkk, ii, iii;
 
 	printf("Write output\n");
-	sprintf(fileName, "C:\\Temp2\\EG4\\out_%i.raw", nx);
+	sprintf(fileName, "%s/out_%i.raw", outputFolder, nx);
 	fo = fopen(fileName, "wb");
 	if (fo == nullptr) {
 		printf("Error: cannot open file \"%s\"\n", fileName);
@@ -488,7 +558,7 @@ int QuatN::setParameters() {
 
 	qini = normQ(a);
 
-	sprintf(oFileName, "C:\\Temp2\\EG4\\info_%i_%i.txt", ng, nx);
+	sprintf(oFileName, "%s/info_%i_%i.txt", outputFolder, ng, nx);
 	return 0;
 }
 
@@ -509,18 +579,16 @@ int QuatN::findScalCoeff(quat a) {
 		}
 	}
 
-	for (int j = 1; j < nthreads; j++) {
+	for (int j = 1; j < nThreads; j++) {
 		memcpy(pw[j], pw[0], 16 * ng * sizeof(double));
 	}
 
 	return 0;
 }
 
-int findScaleFactor(double *vScale, double *maxScaleValue, int ind, double blockStep, double dstep) {
-	__m128d mstart, madd, m1, m2, m3, mmax, mbefore, mone, mminus;
-	int indBx, indBy, indBz;
-	int kij, ki;
-	double x1_min, x1_max, x2_min, x2_max, x3_min, x3_max;
+int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double blockStep, double dstep) {
+	__m128d mstart, madd, m1, m2, m3, mmax, mbefore, mone;
+	int indBx, indBy, indBz, kij, ki;
 	double posx, posy, posz, wMax, s2, s1, x2, x3;
 	Ipp64f vd2[2];
 
@@ -534,19 +602,10 @@ int findScaleFactor(double *vScale, double *maxScaleValue, int ind, double block
 
 	wMax = 0.0;
 
-	x1_min = posx;
-	x2_min = posy;
-	x3_min = posz;
-
-	x1_max = posx + (block_size - 1) * dstep;
-	x2_max = posy + (block_size - 1) * dstep;
-	x3_max = posz + (block_size - 1) * dstep;
-
 	mstart = _mm_set_pd(posx + dstep, posx);
-	madd = _mm_set_pd(2.0 * dstep, 2.0 * dstep);
-	mmax = _mm_set_pd(-1.0, -1.0);
-	mminus = _mm_set_pd(-1.0, -1.0);
-	mone = _mm_set_pd(1.0, 1.0);
+	madd = _mm_set1_pd(2.0 * dstep);
+	mmax = _mm_set1_pd(-1.0);
+	mone = _mm_set1_pd(1.0);
 
 	for (int k = 0; k < block_size; k++) {
 		x3 = posz + double(k) * dstep;
@@ -573,26 +632,34 @@ int findScaleFactor(double *vScale, double *maxScaleValue, int ind, double block
 	}
 
 	_mm_store_pd(vd2, mmax);
-	wMax = __max(vd2[0], vd2[1]);
+	if (vd2[0] > vd2[1]) {
+		wMax = vd2[0];
+	}
+	else {
+		wMax = vd2[1];
+	}
+	//wMax = __max(vd2[0], vd2[1]);
 	*maxScaleValue = wMax;
 	return 0;
 }
 
 
-int updateData(Ipp32f* vd, double* weight, double* vScale, double maxScaleFactor, double* vds, int ind, double blockStep, double dstep, double* vBest, quat* qBest, float* valMax, quat* qMax) {
+int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor, Ipp64f* vds, int ind, double blockStep, double dstep, double* vBest, quat* qBest, float* valMax, quat* qMax) {
 	int ki, kij, sg, indBx, indBy, indBz;
 
 	Ipp32f* vd_loc;
 	
 	double bg[4], x1, x2, x3, *w_loc, *vB;
 	double posx, posy, posz, vres, wx2, wx3, res1, res2, uQ;
+	double ares1, ares2;
 	double x1_min, x1_max, x2_min, x2_max, x3_min, x3_max;
+	double r1, r2, r3;
 	
 	quat qq;
 
 	bool isNew, isToProc;
 
-	__m128d mstart, madd, m1, m2, m3, mmax, mbefore, mone, mw1, m4, mBin, m5, mOld, mminus;
+	__m128d mstart, madd, m1, m2, m3, mbefore, mw1, m4, mBin, m5, mOld, mminus;
 
 	indBx = ind % nblocks;
 	indBy = (ind / nblocks) % nblocks;
@@ -611,10 +678,8 @@ int updateData(Ipp32f* vd, double* weight, double* vScale, double maxScaleFactor
 	x3_max = posz + (block_size - 1) * dstep;
 
 	mstart = _mm_set_pd(posx + dstep, posx);
-	madd = _mm_set_pd(2.0 * dstep, 2.0 * dstep);
-	mmax = _mm_set_pd(-1.0, -1.0);
-	mminus = _mm_set_pd(-1.0, -1.0);
-	mone = _mm_set_pd(1.0, 1.0);
+	madd = _mm_set1_pd(2.0 * dstep);
+	mminus = _mm_set1_pd(-1.0);
 
 	for (int s = 0; s < 4; s++) {
 		vd_loc = vd + s * nbt;
@@ -625,8 +690,6 @@ int updateData(Ipp32f* vd, double* weight, double* vScale, double maxScaleFactor
 		ippsConvert_32f64f(vd_loc, vds, nbt);
 		ippsMulC_64f_I(-1.0, vds, nbt);
 		ippsAddC_64f_I(1.0, vds, nbt);
-
-		double r1, r2, r3;
 
 		isNew = true;
 		for (int g = 0; g < ng; g++) {
@@ -683,12 +746,19 @@ int updateData(Ipp32f* vd, double* weight, double* vScale, double maxScaleFactor
 				res2 += w_loc[3] * x3_min;
 			}
 
-			vres = __max(abs(res1), abs(res2)) * maxScaleFactor;
+			ares1 = abs(res1);
+			ares2 = abs(res2);
+			if (ares1 > ares2) {
+				vres = ares1;
+			}else {
+				vres = ares2;
+			}
+			vres *= maxScaleFactor;
+			//vres = __max(abs(res1), abs(res2)) * maxScaleFactor;
 
 			if (vres > *vB) isToProc = true;
 
 			if (!isToProc) continue;
-
 
 			for (int k = 0; k < block_size; k++) {
 				x3 = posz + double(k) * dstep;
@@ -724,8 +794,6 @@ int updateData(Ipp32f* vd, double* weight, double* vScale, double maxScaleFactor
 
 				}
 			}
-
-
 		}
 
 		isNew = (_mm_extract_epi32(_mm_castpd_si128(mOld), 0) == 0xffffffff) || (_mm_extract_epi32(_mm_castpd_si128(mOld), 2) == 0xffffffff);
@@ -783,8 +851,6 @@ int QuatN::startProcessing() {
 
 	qnew = qini;
 
-	omp_set_num_threads(nthreads);
-
 	dstep = 2.0 / double(nx - 1);
 	blockStep = dstep * double(block_size);
 
@@ -794,8 +860,6 @@ int QuatN::startProcessing() {
 
 #pragma omp parallel
 	{
-		int tid;
-		tid = omp_get_thread_num();
 #pragma omp for
 		for (int i = 0; i < nt; i++) {
 			findScaleFactor(pScale[i], vMaxScaleFactor + i, i, blockStep, dstep);
@@ -803,7 +867,7 @@ int QuatN::startProcessing() {
 	}
 	printf("Done\n");
 
-	for (int k = 0; k < 100; k++) {
+	for (int k = 0; k < ITEMS_IN_THE_LIST; k++) {
 		valMaxGlobal = -1.0;
 		qPrint[icT] = qnew;
 		findScalCoeff(qnew);
@@ -865,7 +929,9 @@ int QuatN::startProcessing() {
 
 	}
 
-	//if (writeOutput() != 0) return -9;
+#ifdef WRITE_OUTPUT
+	if (writeOutput() != 0) return -9;
+#endif
 
 
 	return 0;
@@ -875,9 +941,16 @@ int main() {
 	int ires;
 	QuatN* qn;
 
+	auto start = std::chrono::steady_clock::now();
+
 	qn = new QuatN();
 	ires = qn->startProcessing();
 	delete qn; qn = nullptr;
+
+	auto end = std::chrono::steady_clock::now();
+	auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+	printf("It took me %lld s.\n\n", elapsed.count());
+	
 
 	return ires;
 }
