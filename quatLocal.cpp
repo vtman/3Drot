@@ -21,7 +21,6 @@ const int block_sizeh = 8;//Modify
 const int nblocks = 32;//Modify
 
 //const char outputFolder[1000] = "C:/Temp2/EG4/out";//Modify
-//const char outputFolder[1000] = "/home/sofya/Documents/Codes/rot3D/data";//Modify
 const char outputFolder[1000] = "../data";//Modify
 
 //Modify
