@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <chrono>
+
 #include <omp.h>
 
 #include <emmintrin.h>
@@ -16,9 +18,10 @@ const int ITEMS_IN_THE_LIST = 10000;//Modify
 const int nprintStep = 500;//Modify
 const int nprintStepScreen = 100;//Modify
 const int block_sizeh = 8;//Modify
-const int nblocks = 64;//Modify
+const int nblocks = 32;//Modify
 
 //const char outputFolder[1000] = "C:/Temp2/EG4/out";//Modify
+//const char outputFolder[1000] = "/home/sofya/Documents/Codes/rot3D/data";//Modify
 const char outputFolder[1000] = "../data";//Modify
 
 //Modify
@@ -57,8 +60,7 @@ public:
 
 	int nThreads;
 
-	Ipp64f **pResult, **pScale;
-	Ipp64f** pd, ** pw;
+	Ipp64f **pResult, **pScale, ** pd, ** pw;
 
 	quat qini, qnew;
 
@@ -74,7 +76,7 @@ public:
 };
 
 int updateData(Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, Ipp64f maxScaleValue, int ind, double iniShift, double blockStep, double dstep, double* vBest, quat* qBest, double* valMax, quat* qMax);
-int updateData0(double critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, int ind, double iniShift, double blockStep, double dstep, double* vBest, quat* qBest);
+int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, int ind, double iniShift, double blockStep, double dstep, double* vBest, quat* qBest);
 
 int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double iniShift, double blockStep, double dstep);
 
@@ -94,19 +96,11 @@ QuatA::QuatA() {
 	bestAngle = ippsMalloc_64f(nprintStep);
 	vBest = ippsMalloc_64f(4 * nt);
 	
-	pResult = (Ipp64f**)malloc(sizeof(Ipp64f*) * nt);
-	pScale = (Ipp64f**)malloc(sizeof(Ipp64f*) * nt);
-	pd = (Ipp64f**)malloc(sizeof(Ipp64f*) * nThreads);
-	pw = (Ipp64f**)malloc(sizeof(Ipp64f*) * nThreads);
+	pd = new Ipp64f *[nThreads];
+	pw = new Ipp64f *[nThreads];
+	pScale = new Ipp64f *[nt];
+	pResult = new Ipp64f *[nt];
 
-	for (int i = 0; i < nt; i++) {
-		pResult[i] = nullptr;
-		pScale[i] = nullptr;
-	}
-	for (int i = 0; i < nThreads; i++) {
-		pd[i] = nullptr;
-		pw[i] = nullptr;
-	}
 	foInfo = nullptr;
 }
 
@@ -117,39 +111,27 @@ QuatA::~QuatA() {
 	if (bestPrint != nullptr) { ippsFree(bestPrint); bestPrint = nullptr; }
 	if (vBest != nullptr) { ippsFree(vBest); vBest = nullptr; }
 	if (vMaxScaleFactor != nullptr) { ippsFree(vMaxScaleFactor); vMaxScaleFactor = nullptr; }
-	if (pResult != nullptr) {
-		for (int i = 0; i < nt; i++) {
-			if (pResult[i] != nullptr) {
-				ippsFree(pResult[i]); pResult[i] = nullptr;
-			}
-		}
-		free(pResult); pResult = nullptr;
+
+	for (int i = 0; i < nThreads; i++) {
+		ippsFree(pd[i]); pd[i] = nullptr;
 	}
-	if (pd != nullptr) {
-		for (int i = 0; i < nThreads; i++) {
-			if (pd[i] != nullptr) {
-				ippsFree(pd[i]); pd[i] = nullptr;
-			}
-		}
-		free(pd); pd = nullptr;
+	delete[] pd; pd = nullptr;
+
+	for (int i = 0; i < nThreads; i++) {
+		ippsFree(pw[i]); pw[i] = nullptr;
 	}
-	if (pw != nullptr) {
-		for (int i = 0; i < nThreads; i++) {
-			if (pw[i] != nullptr) {
-				ippsFree(pw[i]); pw[i] = nullptr;
-			}
-		}
-		free(pw); pw = nullptr;
+	delete[] pw; pw = nullptr;
+
+	for (int i = 0; i < nt; i++) {
+		ippsFree(pScale[i]); pScale[i] = nullptr;
 	}
+	delete[] pScale; pScale = nullptr;
+
+	for (int i = 0; i < nt; i++) {
+		ippsFree(pResult[i]); pResult[i] = nullptr;
+	}
+	delete[] pResult; pResult = nullptr;
 	
-	if (pScale != nullptr) {
-		for (int i = 0; i < nt; i++) {
-			if (pScale[i] != nullptr) {
-				ippsFree(pScale[i]); pScale[i] = nullptr;
-			}
-			}
-		free(pScale); pScale = nullptr;
-	}
 	if (foInfo != nullptr) {
 		fclose(foInfo); foInfo = nullptr;
 	}
@@ -337,10 +319,6 @@ int QuatA::allocateMemory() {
 
 	for (int i = 0; i < nt; i++) {
 		pResult[i] = ippsMalloc_64f(nbt);
-		if (pResult[i] == nullptr) {
-			printf("Error: can not allocate memory\n");
-			return -1;
-		}
 		ippsSet_64f(-1.0, pResult[i], nbt);
 	}
 
@@ -504,11 +482,10 @@ int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double iniSh
 
 
 
-int updateData0(double critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, int ind, double iniShift, double blockStep, double dstep, double* vBest, quat* qBest) {
+int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, int ind, double iniShift, double blockStep, double dstep, double* vBest, quat* qBest) {
 	int ki, kij, indBx, indBy, indBz;
 	double x1, x2, x3;
 	double posx, posy, posz, wx2, wx3, uQ;
-	
 
 	quat qq;
 	
@@ -641,7 +618,6 @@ int updateData(Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, double maxScaleFact
 	bg[1] = weight[1] / weight[0];
 	bg[2] = weight[2] / weight[0];
 	bg[3] = weight[3] / weight[0];
-
 	
 
 	r1 = abs((bg[1] - posx) / blockStep - 0.5);
@@ -858,6 +834,9 @@ int QuatA::startProcessing() {
 		if (icT == nprintStep) {
 			if (k == nprintStep - 1) {
 				foInfo = fopen(oFileName, "w");
+				if(foInfo == nullptr){
+					printf("Error: cannot open file %s\n", oFileName);
+				}
 			}
 			else {
 				foInfo = fopen(oFileName, "a");
@@ -883,9 +862,15 @@ int main() {
 	int ires;
 	QuatA* qa;
 
+	auto start = std::chrono::steady_clock::now();
+
 	qa = new QuatA();
 	ires = qa->startProcessing();
 	delete qa; qa = nullptr;
+
+	auto end = std::chrono::steady_clock::now();
+	auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+	printf("It took me %ld s.\n\n", (long)(elapsed.count()));
 
 	return ires;
 }
