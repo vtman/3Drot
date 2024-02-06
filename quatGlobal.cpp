@@ -32,7 +32,6 @@ const int nprintStep = 500;//Modify
 const int nprintStepScreen = 100;//Modify
 
 //const char outputFolder[1000] = "C:/Temp2/EG4/out";//Modify
-//const char outputFolder[1000] = "/home/sofya/Documents/Codes/rot3D/data";//Modify
 const char outputFolder[1000] = "../data";//Modify
 
 #ifdef CASE_XYZ
