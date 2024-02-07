@@ -26,12 +26,12 @@
 //#define WRITE_OUTPUT 1
 
 const int block_sizeh = 8;//Modify
-const int nblocks = 32;//Modify
+const int nblocks = 16;//Modify
 const int ITEMS_IN_THE_LIST = 10000;//Modify
 const int nprintStep = 500;//Modify
 const int nprintStepScreen = 100;//Modify
 
-//const char outputFolder[1000] = "C:/Temp2/EG4/out";//Modify
+//const char outputFolder[1000] = "C:/Temp2/EG4/out2";//Modify
 const char outputFolder[1000] = "../data";//Modify
 
 #ifdef CASE_XYZ
@@ -84,21 +84,22 @@ public:
 
 	mat3D rotM[ng];
 	quat qrot[ng], qini, qnew;
-	quat *qPrint, *qBest;
+	quat* qPrint;
+	quat * qBest;
 
 	int nThreads;
 
 	Ipp32f ** pResult;
 	Ipp64f** pd, ** pw, **pScale;
-	Ipp64f * bestPrint, *bestAngle, *vMaxScaleFactor, *vBest;
+	Ipp64f* bestPrint, * bestAngle, * vMaxScaleFactor;
+	Ipp64f * vBest;
 	
 	char oFileName[1000];
 
 	FILE* fo, *foInfo;
 };
 
-int updateData(Ipp64f* vd, Ipp64f* weight, Ipp64f* vScale, Ipp64f maxScaleValue, Ipp64f* vds, int ind, double blockStep, double dstep, Ipp64f* vBest, quat* qBest, float* valMax, quat* qMax);
-
+int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, Ipp64f maxScaleValue, Ipp64f* vds, int ind, double blockStep, double dstep, Ipp64f valMaxIn, Ipp64f *valMaxOut, Ipp64f *vB, quat *qB, quat* qMax);
 int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double blockStep, double dstep);
 
 QuatN::QuatN() {
@@ -182,7 +183,7 @@ int QuatN::allocateMemory() {
 	for (int i = 0; i < nt; i++) {
 		pScale[i] = ippsMalloc_64f(nbt);
 	}
-	ippsSet_64f(-1.0, vBest, 4 * nt);
+	ippsSet_64f(0.0, vBest, 4 * nt);
 
 	dblock = 2.0 / double(nx - 1) * double(block_size);
 
@@ -197,9 +198,9 @@ int QuatN::allocateMemory() {
 				ind = 4 * ((k * nblocks + i) * nblocks + j);
 				for (int s = 0; s < 4; s++) {
 					qBest[ind + s].q[s] = w;
-					qBest[ind + s].q[(s + 1) % 4] = x1;
-					qBest[ind + s].q[(s + 2) % 4] = x2;
-					qBest[ind + s].q[(s + 3) % 4] = x3;
+					qBest[ind + s].q[(s + 1) & 3] = x1;
+					qBest[ind + s].q[(s + 2) & 3] = x2;
+					qBest[ind + s].q[(s + 3) & 3] = x3;
 				}
 			}
 		}
@@ -548,16 +549,16 @@ int QuatN::findScalCoeff(quat a) {
 	for (int i = 0; i < ng; i++) {
 		b = quatProd(a, qrot[i]);
 		for (int k = 0; k < 4; k++) {
-			v_loc = vw + 4 * ng * k + 4 * i;
+			v_loc = vw + 4 * (ng * k + i);
 			v_loc[0] = b.q[k];
-			v_loc[1] = b.q[(k + 1) % 4];
-			v_loc[2] = b.q[(k + 2) % 4];
-			v_loc[3] = b.q[(k + 3) % 4];
+			v_loc[1] = b.q[(k + 1) & 3];
+			v_loc[2] = b.q[(k + 2) & 3];
+			v_loc[3] = b.q[(k + 3) & 3];
 		}
 	}
 
 	for (int j = 1; j < nThreads; j++) {
-		memcpy(pw[j], pw[0], 16 * ng * sizeof(double));
+		ippsCopy_64f(pw[0], pw[j], 16 * ng);
 	}
 
 	return 0;
@@ -592,7 +593,7 @@ int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double block
 			s2 = s1 + x2 * x2;
 			ki = (k * block_size + i) * block_size;
 
-			mbefore = _mm_set_pd(s2, s2);
+			mbefore = _mm_set1_pd(s2);
 			m1 = mstart;
 			for (int j = 0; j < block_sizeh; j++) {
 				m2 = _mm_mul_pd(m1, m1);
@@ -620,23 +621,23 @@ int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double block
 	return 0;
 }
 
-
-int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor, Ipp64f* vds, int ind, double blockStep, double dstep, double* vBest, quat* qBest, float* valMax, quat* qMax) {
+int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor, Ipp64f* vds, int ind, double blockStep, double dstep, Ipp64f valMaxIn, Ipp64f* valMaxOut, Ipp64f *vBest, quat *qBest, quat* qMax) {
 	int ki, kij, sg, indBx, indBy, indBz;
+	int s0, s1, s2, s3;
 
 	Ipp32f* vd_loc;
-	
-	double bg[4], x1, x2, x3, *w_loc, *vB;
-	double posx, posy, posz, vres, wx2, wx3, res1, res2, uQ;
-	double ares1, ares2;
+
+	double x1, x2, x3, * w_loc;
+	double posx, posy, posz;
+	double wx2, wx3, rmin, rmax, uQ;
 	double x1_min, x1_max, x2_min, x2_max, x3_min, x3_max;
-	double r1, r2, r3;
+
+	bool tOk, isNew;
 	
-	quat qq;
+	quat qq, qSave;
 
-	bool isNew, isToProc;
-
-	__m128d mstart, madd, m1, m2, m3, mbefore, mw1, m4, mBin, m5, mOld, mminus;
+	__m128d mstart, madd, m1, m2, m3, mbefore, mw1, m4, m5, mminus;
+	__m128i mBin, mOld;
 
 	indBx = ind % nblocks;
 	indBy = (ind / nblocks) % nblocks;
@@ -658,11 +659,18 @@ int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor
 	madd = _mm_set1_pd(2.0 * dstep);
 	mminus = _mm_set1_pd(-1.0);
 
+	*valMaxOut = 1.5;
+	qq.q[0] = 1.0; qq.q[1] = 1.0; qq.q[2] = 1.0; qq.q[3] = 1.0;
+	*qMax = qq;
+
 	for (int s = 0; s < 4; s++) {
 		vd_loc = vd + s * nbt;
-		vB = vBest + s;
+		s0 = s;
+		s1 = (s + 1) & 3;
+		s2 = (s + 2) & 3;
+		s3 = (s + 3) & 3;
 
-		mOld = _mm_castsi128_pd(_mm_set1_epi64x(0));
+		mOld = _mm_set1_epi64x(0);
 
 		ippsConvert_32f64f(vd_loc, vds, nbt);
 		ippsMulC_64f_I(-1.0, vds, nbt);
@@ -673,69 +681,45 @@ int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor
 			sg = s * ng + g;
 			w_loc = weight + 4 * sg;
 
-			mw1 = _mm_set_pd(w_loc[1], w_loc[1]);
+			mw1 = _mm_set1_pd(w_loc[1]);
 
-			isToProc = false;
-
-			if (abs(w_loc[0]) > 0.05) {
-
-				bg[0] = 1.0;
-				bg[1] = w_loc[1] / w_loc[0];
-				bg[2] = w_loc[2] / w_loc[0];
-				bg[3] = w_loc[3] / w_loc[0];
-
-				r1 = abs((bg[1] - posx) / blockStep - 0.5);
-				r2 = abs((bg[2] - posy) / blockStep - 0.5);
-				r3 = abs((bg[3] - posz) / blockStep - 0.5);
-
-				if (r1 < 0.7 && r2 < 0.7 && r3 < 0.7) {
-					isToProc = true;
-				}
-			}
-
-			res1 = w_loc[0];
-			res2 = w_loc[0];
+			rmin = w_loc[0];
+			rmax = w_loc[0];
 
 			if (w_loc[1] > 0.0) {
-				res1 += w_loc[1] * x1_min;
-				res2 += w_loc[1] * x1_max;
+				rmin += w_loc[1] * x1_min;
+				rmax += w_loc[1] * x1_max;
 			}
 			else {
-				res1 += w_loc[1] * x1_max;
-				res2 += w_loc[1] * x1_min;
+				rmin += w_loc[1] * x1_max;
+				rmax += w_loc[1] * x1_min;
 			}
 
 			if (w_loc[2] > 0.0) {
-				res1 += w_loc[2] * x2_min;
-				res2 += w_loc[2] * x2_max;
+				rmin += w_loc[2] * x2_min;
+				rmax += w_loc[2] * x2_max;
 			}
 			else {
-				res1 += w_loc[2] * x2_max;
-				res2 += w_loc[2] * x2_min;
+				rmin += w_loc[2] * x2_max;
+				rmax += w_loc[2] * x2_min;
 			}
 
 			if (w_loc[3] > 0.0) {
-				res1 += w_loc[3] * x3_min;
-				res2 += w_loc[3] * x3_max;
+				rmin += w_loc[3] * x3_min;
+				rmax += w_loc[3] * x3_max;
 			}
 			else {
-				res1 += w_loc[3] * x3_max;
-				res2 += w_loc[3] * x3_min;
+				rmin += w_loc[3] * x3_max;
+				rmax += w_loc[3] * x3_min;
 			}
+			rmin *= maxScaleFactor;
+			rmax *= maxScaleFactor;
+			
+			tOk = true;
+			if (rmax > valMaxIn)tOk = false;
+			if (rmin < -valMaxIn)tOk = false;
 
-			ares1 = abs(res1);
-			ares2 = abs(res2);
-			if (ares1 > ares2) {
-				vres = ares1;
-			}else {
-				vres = ares2;
-			}
-			vres *= maxScaleFactor;
-			//vres = __max(abs(res1), abs(res2)) * maxScaleFactor;
-
-			if (vres > *vB) isToProc = true;
-
-			if (!isToProc) continue;
+			if (tOk)continue;
 
 			for (int k = 0; k < block_size; k++) {
 				x3 = posz + double(k) * dstep;
@@ -745,7 +729,7 @@ int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor
 					wx2 = wx3 + w_loc[2] * x2;
 					ki = (k * block_size + i) * block_size;
 
-					mbefore = _mm_set_pd(wx2, wx2);
+					mbefore = _mm_set1_pd(wx2);
 					m1 = mstart;
 					for (int j = 0; j < block_sizeh; j++) {
 						kij = ki + 2 * j;
@@ -754,17 +738,18 @@ int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor
 						m5 = _mm_mul_pd(m2, mminus);
 						m2 = _mm_max_pd(m2, m5);
 						m3 = _mm_load_pd(vScale + kij);
-						m4 = _mm_load_pd(vds + kij);
 						m3 = _mm_mul_pd(m3, m2);
 
-						mBin = _mm_cmpgt_pd(m3, m4);
+						m4 = _mm_load_pd(vds + kij);
 
-						m3 = _mm_and_pd(mBin, m3);
-						m4 = _mm_andnot_pd(mBin, m4);
+						mBin = _mm_castpd_si128(_mm_cmpgt_pd(m3, m4));
+
+						m3 = _mm_castsi128_pd(_mm_and_si128(mBin, _mm_castpd_si128(m3)));
+						m4 = _mm_castsi128_pd(_mm_andnot_si128(mBin, _mm_castpd_si128(m4)));
 						m4 = _mm_add_pd(m3, m4);
-
-						mOld = _mm_or_pd(mOld, mBin);
 						_mm_store_pd(vds + kij, m4);
+
+						mOld = _mm_or_si128(mOld, mBin);
 
 						m1 = _mm_add_pd(m1, madd);
 					}
@@ -772,45 +757,54 @@ int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor
 				}
 			}
 		}
+		mOld = _mm_or_si128(mOld, _mm_bsrli_si128(mOld, 8));
 
-		isNew = (_mm_extract_epi32(_mm_castpd_si128(mOld), 0) == 0xffffffff) || (_mm_extract_epi32(_mm_castpd_si128(mOld), 2) == 0xffffffff);
-		if (isNew) {
+		isNew = (_mm_extract_epi32(mOld, 0) == 0xffffffff);
+
+		if (!isNew) {
+			if (vBest[s] < *valMaxOut) {
+				*valMaxOut = vBest[s];
+				*qMax = qBest[s];
+			}
+		}
+		else {
+			qq = qBest[s];
 
 			uQ = 2.0;
-			qq.q[0] = 1.0; qq.q[1] = 1.0; qq.q[2] = 1.0; qq.q[3] = 1.0;
+			qSave.q[s0] = 1.0;
 			for (int k = 0; k < block_size; k++) {
 				x3 = posz + double(k) * dstep;
+				qSave.q[s3] = x3;
 				for (int i = 0; i < block_size; i++) {
 					x2 = posy + double(i) * dstep;
+					qSave.q[s2] = x2;
 					ki = k * block_size + i;
 					for (int j = 0; j < block_size; j++) {
 						x1 = posx + double(j) * dstep;
 						kij = ki * block_size + j;
 						if (vds[kij] < uQ) {
 							uQ = vds[kij];
-
-							qq.q[s] = 1.0;
-							qq.q[(s + 1) % 4] = x1;
-							qq.q[(s + 2) % 4] = x2;
-							qq.q[(s + 3) % 4] = x3;
+							qSave.q[s1] = x1;
+							qq = qSave;
 						}
 					}
 				}
 			}
 
-			*vB = uQ;
-			qBest[s] = qq;
+			if (uQ > vBest[s]) {
+				vBest[s] = uQ;
+				qBest[s] = qq;
+			}
 
-			ippsSubC_64f_I(1.0, vds, nbt);
-			ippsMulC_64f_I(-1.0, vds, nbt);
-			ippsConvert_64f32f(vds, vd_loc, nbt);
+			if (uQ < *valMaxOut) {
+				*valMaxOut = uQ;
+				*qMax = qq;
+			}
 		}
 
-		if (1.0 - *vB > *valMax) {
-			*valMax = 1.0 - *vB;
-			*qMax = qBest[s];
-		}
-
+		ippsSubC_64f_I(1.0, vds, nbt);
+		ippsMulC_64f_I(-1.0, vds, nbt);
+		ippsConvert_64f32f(vds, vd_loc, nbt);
 	}
 
 	return 0;
@@ -818,15 +812,17 @@ int updateData(Ipp32f* vd, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor
 
 int QuatN::startProcessing() {
 	int icT;
-	float valMaxGlobal;
+	Ipp64f valMaxGlobal, valMinGlobal;
 	double dstep, blockStep;
 	quat qa;
+	int i;
 
 	if (setParameters() != 0) return -3;
 	if (setRotations() != 0) return -1;
 	if (allocateMemory() != 0) return -2;
 
 	qnew = qini;
+	qa = qnew;
 
 	dstep = 2.0 / double(nx - 1);
 	blockStep = dstep * double(block_size);
@@ -835,59 +831,52 @@ int QuatN::startProcessing() {
 
 	printf("Find scale factor\n");
 
-#pragma omp parallel
-	{
-#pragma omp for
-		for (int i = 0; i < nt; i++) {
-			findScaleFactor(pScale[i], vMaxScaleFactor + i, i, blockStep, dstep);
-		}
+#pragma omp parallel for private (i)
+	for (i = 0; i < nt; i++) {
+		findScaleFactor(pScale[i], vMaxScaleFactor + i, i, blockStep, dstep);
 	}
 	printf("Done\n");
 
+	valMaxGlobal = 0.0;
+	valMinGlobal = 0.0;
 	for (int k = 0; k < ITEMS_IN_THE_LIST; k++) {
-		valMaxGlobal = -1.0;
+		
 		qPrint[icT] = qnew;
 		findScalCoeff(qnew);
-#pragma omp parallel
+		valMinGlobal = 2.0;
+#pragma omp parallel shared(qa, valMaxGlobal, valMinGlobal) private(i)
 		{
 			quat qMax;
-			float valMax;
-			valMax = -1.0f;
+			Ipp64f valMaxIn, valMaxOut;
+			valMaxIn = valMaxGlobal;
+
 			qMax.q[0] = 1.0; qMax.q[1] = 0.0; qMax.q[2] = 0.0; qMax.q[3] = 1.0;
 			int tid;
 			tid = omp_get_thread_num();
 #pragma omp for
-			for (int i = 0; i < nt; i++) {
-				updateData(pResult[i], pw[tid], pScale[i], vMaxScaleFactor[i], pd[tid], i, blockStep, dstep, vBest + 4 * i, qBest + 4 * i, &valMax, &qMax);
-			}
+			for (i = 0; i < nt; i++) {
+				updateData(pResult[i], pw[tid], pScale[i], vMaxScaleFactor[i], pd[tid], i, blockStep, dstep, valMaxIn, &valMaxOut, vBest +4 * i, qBest + 4*i, &qMax);
 
 #pragma omp critical
-			{
-				if (valMax > valMaxGlobal) {
-					valMaxGlobal = valMax;
-					qa = qMax;
+				{
+					if (valMaxOut < valMinGlobal) {
+						valMinGlobal = valMaxOut;
+						qa = qMax;
+					}
 				}
 			}
-
 		}
+
+		valMaxGlobal = valMinGlobal;
 
 		qnew = normQ(qa);
 
 		if (k%nprintStepScreen == 0) {
-			printf("%i Value: %f (%f, %f, %f, %f)\t %f\n", k + 1, valMaxGlobal, qnew.q[0], qnew.q[1], qnew.q[2], qnew.q[3], 2.0 * pi180r * acos(1.0 - valMaxGlobal));
+			printf("%i Value: %f (%f, %f, %f, %f)\t %f\n", k + 1, valMaxGlobal, qnew.q[0], qnew.q[1], qnew.q[2], qnew.q[3], 2.0 * pi180r * acos(valMaxGlobal));
 		}
 
-		/*valMaxGlobal = -1.0;
-		for (int s = 0; s < nt; s++) {
-			for (int m = 0; m < nbt4; m++) {
-				valMaxGlobal = __max(valMaxGlobal, pResult[s][m]);
-			}
-		}
-
-		printf("Best: %f\n", 2.0 * pi180r * acos(1.0 - valMaxGlobal));
-		*/
-		bestPrint[icT] = valMaxGlobal;
-		bestAngle[icT] = 2.0 * pi180r * acos(1.0 - valMaxGlobal);
+		bestPrint[icT] = valMinGlobal;
+		bestAngle[icT] = 2.0 * pi180r * acos(valMinGlobal);
 		icT++;
 
 		if (icT == nprintStep) {
@@ -912,8 +901,6 @@ int QuatN::startProcessing() {
 #ifdef WRITE_OUTPUT
 	if (writeOutput() != 0) return -9;
 #endif
-
-
 	return 0;
 }
 

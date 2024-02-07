@@ -14,11 +14,11 @@
 #include "ipp.h"
 
 const double angleInDeg = 10.0;//Modify
+const int block_sizeh = 8;//Modify
+const int nblocks = 16;//Modify
 const int ITEMS_IN_THE_LIST = 10000;//Modify
 const int nprintStep = 500;//Modify
 const int nprintStepScreen = 100;//Modify
-const int block_sizeh = 8;//Modify
-const int nblocks = 32;//Modify
 
 //const char outputFolder[1000] = "C:/Temp2/EG4/out";//Modify
 const char outputFolder[1000] = "../data";//Modify
@@ -74,8 +74,8 @@ public:
 	FILE* fo, *foInfo;
 };
 
-int updateData(Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, Ipp64f maxScaleValue, int ind, double iniShift, double blockStep, double dstep, double* vBest, quat* qBest, double* valMax, quat* qMax);
-int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, int ind, double iniShift, double blockStep, double dstep, double* vBest, quat* qBest);
+int updateData(Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, Ipp64f maxScaleValue, int ind, double iniShift, double blockStep, double dstep, Ipp64f* vBest, quat* qBest, Ipp64f* valMax, quat* qMax);
+int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, int ind, double iniShift, double blockStep, double dstep, Ipp64f* vBest, quat* qBest);
 
 int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double iniShift, double blockStep, double dstep);
 
@@ -136,6 +136,52 @@ QuatA::~QuatA() {
 	}
 }
 
+
+int QuatA::allocateMemory() {
+	double x3, x2, x1, w, dblock;
+	int ind;
+
+	for (int i = 0; i < nt; i++) {
+		pResult[i] = ippsMalloc_64f(nbt);
+		ippsSet_64f(-1.0, pResult[i], nbt);
+	}
+
+	for (int i = 0; i < nThreads; i++) {
+		pd[i] = ippsMalloc_64f(nbt);
+	}
+
+	for (int i = 0; i < nThreads; i++) {
+		pw[i] = ippsMalloc_64f(4);
+	}
+
+	for (int i = 0; i < nt; i++) {
+		pScale[i] = ippsMalloc_64f(nbt);
+	}
+	ippsSet_64f(0.0, vBest, nt);
+
+	dblock = 2.0 / double(nx - 1) * double(block_size);
+
+	w = 1.0;
+
+	for (int k = 0; k < nblocks; k++) {
+		x3 = double(k) * dblock;
+		for (int i = 0; i < nblocks; i++) {
+			x2 = double(i) * dblock;
+			for (int j = 0; j < nblocks; j++) {
+				x1 = double(j) * dblock;
+				ind = (k * nblocks + i) * nblocks + j;
+
+				qBest[ind].q[0] = w;
+				qBest[ind].q[1] = x1;
+				qBest[ind].q[2] = x2;
+				qBest[ind].q[3] = x3;
+
+			}
+		}
+	}
+
+	return 0;
+}
 
 double findNorm3(double x, double y, double z) {
 	double s;
@@ -312,51 +358,7 @@ int printQuat(quat a) {
 	return 0;
 }
 
-int QuatA::allocateMemory() {
-	double x3, x2, x1, w, dblock;
-	int ind;
 
-	for (int i = 0; i < nt; i++) {
-		pResult[i] = ippsMalloc_64f(nbt);
-		ippsSet_64f(-1.0, pResult[i], nbt);
-	}
-
-	for (int i = 0; i < nThreads; i++) {
-		pd[i] = ippsMalloc_64f(nbt);
-	}
-
-	for (int i = 0; i < nThreads; i++) {
-		pw[i] = ippsMalloc_64f(4);
-	}
-
-	for (int i = 0; i < nt; i++) {
-		pScale[i] = ippsMalloc_64f(nbt);
-	}
-	ippsSet_64f(-1.0, vBest, nt);
-
-	dblock = 2.0 / double(nx - 1) * double(block_size);
-
-	w = 1.0;
-
-	for (int k = 0; k < nblocks; k++) {
-		x3 = double(k) * dblock;
-		for (int i = 0; i < nblocks; i++) {
-			x2 = double(i) * dblock;
-			for (int j = 0; j < nblocks; j++) {
-				x1 = double(j) * dblock;
-				ind = (k * nblocks + i) * nblocks + j;
-				
-				qBest[ind].q[0] = w;
-				qBest[ind].q[1] = x1;
-				qBest[ind].q[2] = x2;
-				qBest[ind].q[3] = x3;
-				
-			}
-		}
-	}
-
-	return 0;
-}
 
 int QuatA::writeOutput() {
 	char fileName[1000];
@@ -452,7 +454,7 @@ int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double iniSh
 			s2 = s1 + x2 * x2;
 			ki = (k * block_size + i) * block_size;
 
-			mbefore = _mm_set_pd(s2, s2);
+			mbefore = _mm_set1_pd(s2);
 			m1 = mstart;
 			for (int j = 0; j < block_sizeh; j++) {
 				m2 = _mm_mul_pd(m1, m1);
@@ -481,7 +483,7 @@ int findScaleFactor(Ipp64f *vScale, Ipp64f *maxScaleValue, int ind, double iniSh
 
 
 
-int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, int ind, double iniShift, double blockStep, double dstep, double* vBest, quat* qBest) {
+int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, int ind, double iniShift, double blockStep, double dstep, Ipp64f* vBest, quat* qBest) {
 	int ki, kij, indBx, indBy, indBz;
 	double x1, x2, x3;
 	double posx, posy, posz, wx2, wx3, uQ;
@@ -504,7 +506,7 @@ int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, 
 
 	mOld = _mm_castsi128_pd(_mm_set1_epi64x(0));
 	
-	mw1 = _mm_set_pd(weight[1], weight[1]);
+	mw1 = _mm_set1_pd(weight[1]);
 	
 	for (int k = 0; k < block_size; k++) {
 		x3 = posz + double(k) * dstep;
@@ -514,7 +516,7 @@ int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, 
 			wx2 = wx3 + weight[2] * x2;
 			ki = (k * block_size + i) * block_size;
 
-			mbefore = _mm_set_pd(wx2, wx2);
+			mbefore = _mm_set1_pd(wx2);
 			m1 = mstart;
 			for (int j = 0; j < block_sizeh; j++) {
 				kij = ki + 2 * j;
@@ -543,7 +545,7 @@ int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, 
 	uQ = 2.0;
 	qq.q[0] = 1.0; qq.q[1] = 1.0; qq.q[2] = 1.0; qq.q[3] = 1.0;
 	for (int k = 0; k < block_size; k++) {
-	x3 = posz + double(k) * dstep;
+		x3 = posz + double(k) * dstep;
 		for (int i = 0; i < block_size; i++) {
 			x2 = posy + double(i) * dstep;
 			ki = k * block_size + i;
@@ -571,19 +573,17 @@ int updateData0(Ipp64f critValue, Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, 
 }
 
 
-int updateData(Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor, int ind, double iniShift, double blockStep, double dstep, double* vBest, quat* qBest, double* valMin, quat* qMin) {
+int updateData(Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, double maxScaleFactor, int ind, double iniShift, double blockStep, double dstep, Ipp64f valMaxIn, Ipp64f* valMaxOut, Ipp64f* vBest, quat* qBest, quat* qMin) {
 	int ki, kij, indBx, indBy, indBz;
-	double bg[4], x1, x2, x3;
-	double posx, posy, posz, vres, wx2, wx3, res1, res2, uQ;
+	double x1, x2, x3;
+	double posx, posy, posz, wx2, wx3, rmin, rmax, uQ;
 	double x1_min, x1_max, x2_min, x2_max, x3_min, x3_max;
-	double r1, r2, r3;
-	double ares1, ares2;
+	bool tOk, isNew;
 	
-	quat qq;
+	quat qq, qSave;
 
-	bool isNew, isToProc;
-
-	__m128d mstart, madd, m1, m2, m3, mbefore, mw1, m4, mBin, m5, mOld, mminus;
+	__m128d mstart, madd, m1, m2, m3, mbefore, mw1, m4, m5, mminus;
+	__m128i mBin, mOld;
 
 	indBx = ind % nblocks;
 	indBy = (ind / nblocks) % nblocks;
@@ -602,77 +602,57 @@ int updateData(Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, double maxScaleFact
 	x3_max = posz + (block_size - 1) * dstep;
 
 	mstart = _mm_set_pd(posx + dstep, posx);
-	madd = _mm_set_pd(2.0 * dstep, 2.0 * dstep);
-	mminus = _mm_set_pd(-1.0, -1.0);
+	madd = _mm_set1_pd(2.0 * dstep);
+	mminus = _mm_set1_pd(-1.0);
 
-	mOld = _mm_castsi128_pd(_mm_set1_epi64x(0));
+	mOld = _mm_set1_epi64x(0);
 
 	isNew = true;
 
+	*valMaxOut = 1.5;
+	qq.q[0] = 1.0; qq.q[1] = 1.0; qq.q[2] = 1.0; qq.q[3] = 1.0;
+	*qMin = qq;
+
 	mw1 = _mm_set1_pd(weight[1]);
 
-	isToProc = false;
-	
-	bg[0] = 1.0;
-	bg[1] = weight[1] / weight[0];
-	bg[2] = weight[2] / weight[0];
-	bg[3] = weight[3] / weight[0];
-	
-
-	r1 = abs((bg[1] - posx) / blockStep - 0.5);
-	r2 = abs((bg[2] - posy) / blockStep - 0.5);
-	r3 = abs((bg[3] - posz) / blockStep - 0.5);
-
-	if (r1 < 0.7 && r2 < 0.7 && r3 < 0.7) {
-		isToProc = true;
-	}
-
-	res1 = weight[0];
-	res2 = weight[0];
+	rmin = weight[0];
+	rmax = weight[0];
 
 	if (weight[1] > 0.0) {
-		res1 += weight[1] * x1_min;
-		res2 += weight[1] * x1_max;
+		rmin += weight[1] * x1_min;
+		rmax += weight[1] * x1_max;
 	}
 	else {
-		res1 += weight[1] * x1_max;
-		res2 += weight[1] * x1_min;
+		rmin += weight[1] * x1_max;
+		rmax += weight[1] * x1_min;
 	}
 
 	if (weight[2] > 0.0) {
-		res1 += weight[2] * x2_min;
-		res2 += weight[2] * x2_max;
+		rmin += weight[2] * x2_min;
+		rmax += weight[2] * x2_max;
 	}
 	else {
-		res1 += weight[2] * x2_max;
-		res2 += weight[2] * x2_min;
+		rmin += weight[2] * x2_max;
+		rmax += weight[2] * x2_min;
 	}
 
 	if (weight[3] > 0.0) {
-		res1 += weight[3] * x3_min;
-		res2 += weight[3] * x3_max;
+		rmin += weight[3] * x3_min;
+		rmax += weight[3] * x3_max;
 	}
 	else {
-		res1 += weight[3] * x3_max;
-		res2 += weight[3] * x3_min;
+		rmin += weight[3] * x3_max;
+		rmax += weight[3] * x3_min;
 	}
 
-	ares1 = abs(res1);
-	ares2 = abs(res2);
-	if (ares1 > ares2) {
-		vres = ares1;
-	}
-	else {
-		vres = ares2;
-	}
+	rmin *= maxScaleFactor;
+	rmax *= maxScaleFactor;
 
-	vres *= maxScaleFactor;
-
-	//vres = __max(abs(res1), abs(res2)) * maxScaleFactor;
-
-	if (vres > *vBest) isToProc = true;
-
-	if (isToProc) {
+	tOk = true;
+	if (rmax > valMaxIn)tOk = false;
+	if (rmin < -valMaxIn)tOk = false;
+	
+	if (!tOk) {
 
 		for (int k = 0; k < block_size; k++) {
 			x3 = posz + double(k) * dstep;
@@ -694,63 +674,69 @@ int updateData(Ipp64f* vRes, Ipp64f* weight, Ipp64f* vScale, double maxScaleFact
 					m4 = _mm_load_pd(vRes + kij);
 					m3 = _mm_mul_pd(m3, m2);
 
-					mBin = _mm_cmpgt_pd(m3, m4);
+					mBin = _mm_castpd_si128(_mm_cmpgt_pd(m3, m4));
 
-					m3 = _mm_and_pd(mBin, m3);
-					m4 = _mm_andnot_pd(mBin, m4);
+					m3 = _mm_castsi128_pd(_mm_and_si128(mBin, _mm_castpd_si128(m3)));
+					m4 = _mm_castsi128_pd(_mm_andnot_si128(mBin, _mm_castpd_si128(m4)));
 					m4 = _mm_add_pd(m3, m4);
-
-					mOld = _mm_or_pd(mOld, mBin);
 					_mm_store_pd(vRes + kij, m4);
+
+					mOld = _mm_or_si128(mOld, mBin);
 
 					m1 = _mm_add_pd(m1, madd);
 				}
 			}
 		}
+	}
+	
+	mOld = _mm_or_si128(mOld, _mm_bsrli_si128(mOld, 8));
 
-		isNew = (_mm_extract_epi32(_mm_castpd_si128(mOld), 0) == 0xffffffff) || (_mm_extract_epi32(_mm_castpd_si128(mOld), 2) == 0xffffffff);
-		if (isNew) {
+	isNew = (_mm_extract_epi32(mOld, 0) == 0xffffffff);
+	if (!isNew) {
+		if (*vBest < *valMaxOut) {
+			*valMaxOut = *vBest;
+			*qMin = *qBest;
+		}
+	}else{
+		qq = *qBest;
 
-			uQ = 2.0;
-			qq.q[0] = 1.0; qq.q[1] = 1.0; qq.q[2] = 1.0; qq.q[3] = 1.0;
-			for (int k = 0; k < block_size; k++) {
-				x3 = posz + double(k) * dstep;
-				for (int i = 0; i < block_size; i++) {
-					x2 = posy + double(i) * dstep;
-					ki = k * block_size + i;
-					for (int j = 0; j < block_size; j++) {
-						x1 = posx + double(j) * dstep;
-						kij = ki * block_size + j;
-						if (vRes[kij] < uQ) {
-							uQ = vRes[kij];
-
-							qq.q[0] = 1.0;
-							qq.q[1] = x1;
-							qq.q[2] = x2;
-							qq.q[3] = x3;
-						}
+		uQ = 2.0;
+		qSave.q[0] = 1.0;
+		for (int k = 0; k < block_size; k++) {
+			x3 = posz + double(k) * dstep;
+			qSave.q[3] = x3;
+			for (int i = 0; i < block_size; i++) {
+				x2 = posy + double(i) * dstep;
+				qSave.q[2] = x2;
+				ki = k * block_size + i;
+				for (int j = 0; j < block_size; j++) {
+					x1 = posx + double(j) * dstep;
+					kij = ki * block_size + j;
+					if (vRes[kij] < uQ) {
+						uQ = vRes[kij];
+						qSave.q[1] = x1;
+						qq = qSave;
 					}
 				}
 			}
+		}
 
+		if (uQ > *vBest) {
 			*vBest = uQ;
 			*qBest = qq;
 		}
+		if (*vBest < *valMaxOut) {
+			*valMaxOut = *vBest;
+			*qMin = *qBest;
+		}
 	}
-
-	if (*vBest < *valMin) {
-		*valMin = *vBest;
-		*qMin = *qBest;
-	}
-
-	
 	return 0;
 }
 
 int QuatA::startProcessing() {
-	int icT;
-	double valMinGlobal;
-	double dstep, blockStep;
+	int icT, i;
+	Ipp64f valMaxGlobal, valMinGlobal;
+	double dstep, blockStep, critValue;
 	quat qa;
 
 	if (setParameters() != 0) return -3;
@@ -765,17 +751,14 @@ int QuatA::startProcessing() {
 
 	printf("Find scale factor\n");
 
-#pragma omp parallel
-	{
-#pragma omp for
-		for (int i = 0; i < nt; i++) {
-			findScaleFactor(pScale[i], vMaxScaleFactor + i, i, -parD, blockStep, dstep);
-		}
+#pragma omp parallel for private (i)
+	for (i = 0; i < nt; i++) {
+		findScaleFactor(pScale[i], vMaxScaleFactor + i, i, -parD, blockStep, dstep);
 	}
 	printf("Done\n");
 
-
-	double critValue;
+	valMaxGlobal = 0.0;
+	valMinGlobal = 0.0;
 
 	critValue = cos(0.5* pi180 * angleInDeg);
 
@@ -793,30 +776,31 @@ int QuatA::startProcessing() {
 	}
 
 	for (int k = 0; k < ITEMS_IN_THE_LIST; k++) {
-		valMinGlobal = 1.0;
+		valMinGlobal = 2.0;
 		qPrint[icT] = qnew;
 		findScalCoeff(qnew);
-#pragma omp parallel
+#pragma omp parallel shared(qa, valMaxGlobal, valMinGlobal) private(i)
 		{
 			quat qMin;
-			double valMin;
-			valMin = 1.0f;
+			Ipp64f valMaxIn, valMaxOut;
+			valMaxIn = valMaxGlobal;
+
 			qMin.q[0] = 1.0; qMin.q[1] = 0.0; qMin.q[2] = 0.0; qMin.q[3] = 1.0;
 			int tid;
 			tid = omp_get_thread_num();
 #pragma omp for
-			for (int i = 0; i < nt; i++) {
-				updateData(pResult[i], pw[tid], pScale[i], vMaxScaleFactor[i], i, -parD, blockStep, dstep, vBest + i, qBest + i, &valMin, &qMin);
-			}
+			for (i = 0; i < nt; i++) {
+				updateData(pResult[i], pw[tid], pScale[i], vMaxScaleFactor[i], i, -parD, blockStep, dstep, valMaxIn, &valMaxOut, vBest + i, qBest + i, &qMin);
 
 #pragma omp critical
-			{
-				if (valMin < valMinGlobal) {
-					valMinGlobal = valMin;
-					qa = qMin;
+				{
+					if (valMaxOut < valMinGlobal) {
+						valMinGlobal = valMaxOut;
+						qa = qMin;
+					}
 				}
-			}
 
+			}
 		}
 
 		qnew = normQ(qa);
@@ -824,7 +808,6 @@ int QuatA::startProcessing() {
 		if (k % nprintStepScreen == 0) {
 			printf("%i Value: %f (%f, %f, %f, %f)\t %f\n", k + 1, valMinGlobal, qnew.q[0], qnew.q[1], qnew.q[2], qnew.q[3], 2.0 * pi180r * acos(valMinGlobal));
 		}
-		
 
 		bestPrint[icT] = valMinGlobal;
 		bestAngle[icT] = 2.0 * pi180r * acos(valMinGlobal);
