@@ -46,14 +46,18 @@ Output file. Each line defines a rotation (only one rotation within a group, all
 To compile the code you may use:
 <div><tt>icpc quatGlobal.cpp -mssse3 -std=c++17 -lipps -lippcore -qopenmp -o rotGlobal.exe</div></tt></div>
 
-Run times and memory size when the code is run on a 6-core CPU (Intel, i5-10600KF, 4.1 Ghz, 6 cores, 12 threads), for 10,000 iterations:
+Run times and memory size when the code is run on a 6-core CPU (Intel, i5-10600KF, 4.1 Ghz, 6 cores, 12 threads), for 1000 iterations:
 <table>
   <tr><th>Size</th><th>Memory, GB</th><th>Time, s</th></tr>
-  <tr><th>256</th><th>0.39</th><th>170</th></tr>
-  <tr><th>384</th><th>1.31</th><th>514</th></tr>
-  <tr><th>512</th><th>3.09</th><th>1125</th></tr>
-  <tr><th>768</th><th>10.41</th><th>3433</th></tr>
-  <tr><th>1024</th><th>24.66</th><th>7653</th></tr>
+  <tr><th>128</th><th>0.06</th><th>3</th></tr>
+  <tr><th>256</th><th>0.39</th><th>26</th></tr>
+  <tr><th>384</th><th>1.31</th><th>86</th></tr>
+  <tr><th>512</th><th>3.09</th><th>198</th></tr>
+  <tr><th>640</th><th>6.03</th><th>375</th></tr>
+   <tr><th>768</th><th>10.41</th><th>635</th></tr>
+  <tr><th>896</th><th>16.53</th><th>994</th></tr>
+  <tr><th>1024</th><th>24.66</th><th>1513</th></tr>
+  <tr><th>1152</th><th>35.13</th><th>2071</th></tr>
 </table>
 
 <hr>
